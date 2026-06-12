@@ -9,17 +9,29 @@ st.title("📦 Dashboard de Controlo de Envios CTT - B. Braun")
 st.markdown("---")
 
 # ==============================================================================
-# 🔗 CONFIGURAÇÃO DIRETA DO LINK DO GOOGLE SHEETS
+# 🔗 LINK DE PUBLICAÇÃO REAL DA TUA GOOGLE DRIVE
 # ==============================================================================
-# Este link já aponta diretamente para a exportação limpa do teu ficheiro da Drive
-LINK_DIRETO_GOOGLE = https://docs.google.com/spreadsheets/d/e/2PACX-1vR84h1yg_J4CmyKkZ49XCC7rG4NJhSdnLUotwoWKpU4Ebpq2D2QN0ptsxOOUnHy375RykhNP2bD-2DP/pub?output=csv
+LINK_DIRETO_GOOGLE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTIdXF0pG7E-D_L8gT6T3-CenZ_tM9H1w07p96mP2QJ8C8J0t_T8YvA_M7Vw3F30bUuV7lC5Z6_L_qUjXf-rSjYg/pub?output=csv"
 
-@st.cache_data(ttl=10) # Atualiza quase em tempo real
+@st.cache_data(ttl=10)
 def load_data(url):
     try:
         # Pula as 12 linhas institucionais e lê os dados reais
         df = pd.read_csv(url, skiprows=12)
-        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Limpeza profunda de colunas para eliminar caracteres estranhos (como )
+        novas_colunas = []
+        for col in df.columns:
+            c = str(col).strip()
+            if '1' in c and 'Event' in c:
+                c = 'Data 1º Evento'
+            elif 'ltimo' in c or 'l_timo' in c or 'ltimo' in c or 'u_timo' in c:
+                c = 'Data último evento'
+            elif 'Situa' in c or 'Situao' in c:
+                c = 'Situação do Objeto'
+            novas_colunas.append(c)
+            
+        df.columns = novas_colunas
         return df
     except Exception as e:
         st.error(f"Erro técnico ao aceder ao Google Sheets: {e}")
@@ -35,8 +47,8 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
     df['Situação_Clean'] = df['Situação do Objeto'].astype(str).str.strip().str.upper()
     
     # Classificação exata com base no padrão CTT
-    entregues_mask = df['Situação_Clean'].str.startswith('EMI') | df['Situação_Clean'].str.contains('ENTREGUE')
-    em_transito_mask = df['Situação_Clean'].str.startswith('EMF') | df['Situação_Clean'].str.contains('TRÂN') | df['Situação_Clean'].str.contains('DISTRIB')
+    entregues_mask = df['Situação_Clean'].str.contains('ENTREG|EMI|CONCLU', na=False)
+    em_transito_mask = df['Situação_Clean'].str.contains('TRÂN|EMF|DISTRIB|CAMINH', na=False)
     
     df_entregues = df[entregues_mask]
     df_transito = df[em_transito_mask]
@@ -47,13 +59,14 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
     qtd_transito = len(df_transito)
     qtd_incidencias = len(df_incidencias)
 
-    # 2. CÁLCULO DE TENTATIVAS DE ENTREGA (LÓGICA DE DATAS CTT)
+    # 2. CÁLCULO DE TENTATIVAS DE ENTREGA (CORRIGIDO PARA COLUNAS ESPECIAIS)
     entregues_1a = 0
     entregues_2a = 0
     
     if qtd_entregues > 0:
         def verificar_tentativa(row):
             try:
+                # Compara o dia do primeiro evento com o dia do último evento
                 d1 = str(row['Data 1º Evento']).split()[0]
                 d2 = str(row['Data último evento']).split()[0]
                 return 1 if d1 == d2 else 2
@@ -92,14 +105,14 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
             'Encomendas': [entregues_1a, entregues_2a]
         })
         fig_bar = px.bar(dados_tentativas, x='Desempenho', y='Encomendas', text='Encomendas',
-                         color='Desempenho', color_discrete_sequence=['#2ecc71', '#e67e22'])
+                         color='Desempenho', color_discrete_sequence=['#2ecc71', '#3498db'])
         fig_bar.update_traces(textposition='inside', textfont_size=14)
         st.plotly_chart(fig_bar, use_container_width=True)
 
     with col_graf2:
         st.subheader("🔄 Repartição por Situação CTT")
         fig_pie = px.pie(df, names='Situação do Objeto', 
-                         color_discrete_sequence=px.colors.qualitative.Bold,
+                         color_discrete_sequence=px.colors.qualitative.Safe,
                          hole=0.4)
         fig_pie.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_pie, use_container_width=True)
@@ -118,4 +131,3 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
 
 else:
     st.error("❌ Link ou permissões do Google Sheets inválidos.")
-    st.info("Por favor, garanta que no Google Sheets clicou em 'Partilhar' e mudou para 'Qualquer pessoa com o link'.")
