@@ -2,111 +2,127 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Configuração da página
-st.set_page_config(page_title="Dashboard de Envios CTT - B. Braun", layout="wide")
+# Configuração da página para formato profissional
+st.set_page_config(page_title="Dashboard CTT - B. Braun", layout="wide", page_icon="📦")
 
-st.title("📦 Dashboard de Controlo de Envios CTT")
-st.markdown("Análise em tempo real do Relatório Diário de Expedição.")
+st.title("📦 Dashboard de Controlo de Envios CTT - B. Braun")
+st.markdown("---")
 
-# Link direto para o CSV exportado da Google Drive (Substitui pelo teu link de exportação real)
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1t87M2Y7Z4A_M7Vw3F30bUuV7lC5Z6_L_qUjXf-rSjYg/export?format=csv"
+# ==============================================================================
+# ⚠️ INSTRUÇÃO IMPORTANTE: Substitui o ID abaixo pelo ID da tua Google Drive!
+# ==============================================================================
+# Como encontrar o ID? Na barra de endereço do teu Google Sheets, é o código longo entre /d/ e /edit
+ID_DA_TUA_DRIVE = "1t87M2Y7Z4A_M7Vw3F30bUuV7lC5Z6_L_qUjXf-rSjYg" 
 
-@st.cache_data(ttl=60)
+# Configuração automática da barra lateral para poderes mudar o link se desejares
+st.sidebar.header("⚙️ Configuração da Base de Dados")
+id_input = st.sidebar.text_input("ID do Google Sheets:", value=ID_DA_TUA_DRIVE)
+
+GOOGLE_SHEET_URL = f"https://docs.google.com/spreadsheets/d/{id_input}/export?format=csv"
+
+@st.cache_data(ttl=30)
 def load_data(url):
-    # skiprows=12 faz o Python ignorar as primeiras 12 linhas institucionais e ler a tabela real
-    df = pd.read_csv(url, skiprows=12)
-    # Limpar espaços em branco dos nomes das colunas
-    df.columns = [str(c).strip() for c in df.columns]
-    return df
+    try:
+        # Pula as 12 linhas institucionais para ler os dados reais
+        df = pd.read_csv(url, skiprows=12)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
+    except Exception as e:
+        return None
 
-try:
-    df = load_data(GOOGLE_SHEET_URL)
-    
-    # Remover linhas totalmente vazias que possam vir no fim do ficheiro
-    df = df.dropna(subset=['Objeto'])
-    
-    st.success("✅ Dados do Relatório de Expedição carregados com sucesso!")
+df_raw = load_data(GOOGLE_SHEET_URL)
 
-    # --- PROCESSAMENTO DOS DADOS REAIS CTT ---
+if df_raw is not None and 'Objeto' in df_raw.columns:
+    # Limpeza de linhas em branco do final do relatório
+    df = df_raw.dropna(subset=['Objeto']).copy()
+    
+    # 1. PROCESSAMENTO INTELIGENTE DE ESTADOS (SIGLAS CTT)
+    df['Situação_Clean'] = df['Situação do Objeto'].astype(str).str.strip().str.upper()
+    
+    # Classificação exata com base no padrão CTT detetado no teu ficheiro
+    entregues_mask = df['Situação_Clean'].str.startswith('EMI') | df['Situação_Clean'].str.contains('ENTREGUE')
+    em_transito_mask = df['Situação_Clean'].str.startswith('EMF') | df['Situação_Clean'].str.contains('TRÂN') | df['Situação_Clean'].str.contains('DISTRIB')
+    
+    df_entregues = df[entregues_mask]
+    df_transito = df[em_transito_mask]
+    # O que não está entregue nem em trânsito é considerado Incidência/Retido/Devolvido
+    df_incidencias = df[~(entregues_mask | em_transito_mask)]
+    
     total_envios = len(df)
-    
-    # Criar uma coluna limpa para analisar o estado (ex: "EMI - Entregue" passa a ser avaliado)
-    df['situacao_clean'] = df['Situação do Objeto'].astype(str).str.upper()
-    
-    # Filtros baseados nos códigos reais dos CTT
-    entregues_df = df[df['situacao_clean'].str.contains('ENTREGUE|EMI|ENT', na=False)]
-    pendentes_df = df[df['situacao_clean'].str.contains('TRÂNCO|TRÂNSITO|EMF|DISTRIB', na=False)]
-    incidencias_df = df[df['situacao_clean'].str.contains('INCID|ALERTA|DEV|RETIDO|FALHA', na=False)]
-    
-    entregues = len(entregues_df)
-    pendentes = len(pendentes_df)
-    incidencias = total_envios - (entregues + pendentes) # O resto assume incidência/outros
+    qtd_entregues = len(df_entregues)
+    qtd_transito = len(df_transito)
+    qtd_incidencias = len(df_incidencias)
 
-    # Simulação de tentativas (Como o ficheiro CTT não traz o número, calculamos com base na lógica de eventos)
-    # Se a data do 1º evento for igual à do último, assumimos 1ª tentativa. Se mudar, assumimos 2ª.
-    df['Data 1º Evento'] = df['Data 1º Evento'].astype(str).str.strip()
-    df['Data último evento'] = df['Data último evento'].astype(str).str.strip()
+    # 2. CÁLCULO DE TENTATIVAS DE ENTREGA (LÓGICA DE DATAS CTT)
+    # Se a data do primeiro evento é igual à do último, foi entregue à 1ª tentativa
+    entregues_1a = 0
+    entregues_2a = 0
     
-    entregues_completo_df = df.loc[entregues_df.index].copy()
-    
-    # Extrair apenas a data (sem a hora) para comparar o dia do primeiro e do último evento
-    def calcular_tentativas(row):
-        try:
-            d1 = row['Data 1º Evento'].split()[0]
-            d2 = row['Data último evento'].split()[0]
-            return 1 if d1 == d2 else 2
-        except:
-            return 1
+    if qtd_entregues > 0:
+        def verificar_tentativa(row):
+            try:
+                d1 = str(row['Data 1º Evento']).split()[0]
+                d2 = str(row['Data último evento']).split()[0]
+                return 1 if d1 == d2 else 2
+            except:
+                return 1
+                
+        df_entregues_calc = df_entregues.copy()
+        df_entregues_calc['Tentativas'] = df_entregues_calc.apply(verificar_tentativa, axis=1)
+        entregues_1a = len(df_entregues_calc[df_entregues_calc['Tentativas'] == 1])
+        entregues_2a = len(df_entregues_calc[df_entregues_calc['Tentativas'] == 2])
 
-    if not entregues_completo_df.empty:
-        entregues_completo_df['Tentativas_Calculadas'] = entregues_completo_df.apply(calcular_tentativas, axis=1)
-        entregues_1a = len(entregues_completo_df[entregues_completo_df['Tentativas_Calculadas'] == 1])
-        entregues_2a = len(entregues_completo_df[entregues_completo_df['Tentativas_Calculadas'] == 2])
-    else:
-        entregues_1a, entregues_2a = 0, 0
-
-    # --- PAINEL DE METRICAS (KPIs) ---
-    st.subheader("📊 Resumo Operacional")
+    # 3. PAINEL DE MÉTRICAS (KPIs VISUAIS)
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     
-    kpi1.metric(label="📦 Total de Envios", value=f"{total_envios:,}")
-    kpi2.metric(label="✅ Entregues", value=f"{entregues:,}", delta=f"{(entregues/max(total_envios,1))*100:.1f}% do total")
-    kpi3.metric(label="⏳ Em Trânsito / Pendentes", value=f"{pendentes:,}", delta=f"{(pendentes/max(total_envios,1))*100:.1f}%", delta_color="inverse")
-    kpi4.metric(label="⚠️ Incidências / Outros", value=f"{incidencias:,}", delta=f"{(incidencias/max(total_envios,1))*100:.1f}%", delta_color="inverse")
+    with kpi1:
+        st.metric(label="📦 Total de Envios", value=f"{total_envios:,}")
+    with kpi2:
+        perc_ent = (qtd_entregues / max(total_envios, 1)) * 100
+        st.metric(label="✅ Total Entregues", value=f"{qtd_entregues:,}", delta=f"{perc_ent:.1f}% do volume")
+    with kpi3:
+        perc_tra = (qtd_transito / max(total_envios, 1)) * 100
+        st.metric(label="⏳ Em Trânsito / Pendentes", value=f"{qtd_transito:,}", delta=f"{perc_tra:.1f}%", delta_color="normal")
+    with kpi4:
+        perc_inc = (qtd_incidencias / max(total_envios, 1)) * 100
+        st.metric(label="⚠️ Incidências / Alertas", value=f"{qtd_incidencias:,}", delta=f"{perc_inc:.1f}%", delta_color="inverse")
 
     st.markdown("---")
 
-    # --- GRÁFICOS ---
+    # 4. ÁREA DOS GRÁFICOS INTERATIVOS
     col_graf1, col_graf2 = st.columns(2)
     
     with col_graf1:
-        st.subheader("🎯 Eficácia de Entrega")
+        st.subheader("🎯 Eficácia Operacional (Tentativas)")
         dados_tentativas = pd.DataFrame({
-            'Performance': ['À 1ª Tentativa (Mesmo Dia)', 'À 2ª Tentativa+ (Dias Diferentes)'],
-            'Quantidade': [entregues_1a, entregues_2a]
+            'Desempenho': ['À 1ª Tentativa', 'À 2ª Tentativa ou Mais'],
+            'Encomendas': [entregues_1a, entregues_2a]
         })
-        fig_bar = px.bar(dados_tentativas, x='Performance', y='Quantidade', text='Quantidade',
-                         color='Performance', color_discrete_sequence=['#2ecc71', '#3498db'])
-        fig_bar.update_traces(textposition='inside')
+        fig_bar = px.bar(dados_tentativas, x='Desempenho', y='Encomendas', text='Encomendas',
+                         color='Desempenho', color_discrete_sequence=['#2ecc71', '#e67e22'])
+        fig_bar.update_traces(textposition='inside', textfont_size=14)
         st.plotly_chart(fig_bar, use_container_width=True)
 
     with col_graf2:
-        st.subheader("🔄 Distribuição por Situação Real")
-        fig_pie = px.pie(df, names='Situação do Objeto', color_discrete_sequence=px.colors.qualitative.Safe)
+        st.subheader("🔄 Repartição por Situação CTT")
+        fig_pie = px.pie(df, names='Situação do Objeto', 
+                         color_discrete_sequence=px.colors.qualitative.Bold,
+                         hole=0.4)
+        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- TABELA DE DADOS ---
+    # 5. TABELA DE PESQUISA AVANÇADA
     st.markdown("---")
-    st.subheader("🔍 Listagem de Objetos Encontrados")
+    st.subheader("🔍 Filtro e Consulta de Objetos")
     
-    # Filtro rápido interativo
-    filtro_sit = st.selectbox("Filtrar listagem por Situação:", ["Todos"] + list(df['Situação do Objeto'].unique()))
-    df_visivel = df if filtro_sit == "Todos" else df[df['Situação do Objeto'] == filtro_sit]
+    estados_unicos = ["Todos"] + list(df['Situação do Objeto'].unique())
+    filtro = st.selectbox("Escolha uma situação para isolar os dados:", estados_unicos)
     
-    # Mostrar colunas úteis organizadas
-    colunas_visiveis = ['Objeto', 'Refª Cliente', 'Situação do Objeto', 'Data 1º Evento', 'Data último evento', 'Nome do Destinatário']
-    st.dataframe(df_visivel[colunas_visiveis], use_container_width=True)
+    df_filtrado = df if filtro == "Todos" else df[df['Situação do Objeto'] == filtro]
+    
+    colunas_comerciais = ['Objeto', 'Refª Cliente', 'Situação do Objeto', 'Data 1º Evento', 'Data último evento', 'Nome do Destinatário', 'Código Postal']
+    st.dataframe(df_filtrado[colunas_comerciais], use_container_width=True, hide_index=True)
 
-except Exception as e:
-    st.error(f"Erro ao processar a tabela: {e}")
-    st.info("Verifique se o ficheiro na Google Drive mantém a linha 'Cód. Cliente,Cód. Contrato...' na linha 13.")
+else:
+    st.error("❌ Não foi possível ler dados válidos do Google Sheets.")
+    st.info("👉 Certifica-te que colaste o ID correto do teu ficheiro na barra lateral e que o partilhaste como 'Qualquer pessoa com o link'.")
