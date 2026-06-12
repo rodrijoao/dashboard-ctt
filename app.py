@@ -3,80 +3,76 @@ import pandas as pd
 import plotly.express as px
 
 # Configuração da página
-st.set_page_config(page_title="Dashboard de Envios CTT", layout="wide")
+st.set_page_config(page_title="Dashboard de Envios CTT - B. Braun", layout="wide")
 
-st.title("📦 Dashboard de Controlo de Envios (Google Drive)")
-st.markdown("""
-Esta aplicação lê automaticamente os dados atualizados diretamente da sua Google Drive Premium.
-Basta substituir o ficheiro na sua pasta partilhada para que os gráficos se atualizem!
-""")
+st.title("📦 Dashboard de Controlo de Envios CTT")
+st.markdown("Análise em tempo real do Relatório Diário de Expedição.")
 
-# Link direto para o CSV exportado da Google Drive (Substituir ID_DO_SEU_FICHEIRO)
-# IMPORTANTE: O utilizador terá de colar o ID real do ficheiro dele aqui
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1Nd9fxXR4CwlA-t7DJgPYaOfwbKcHekjGwzOxvofwwo0/edit?gid=1823527833#gid=1823527833"
+# Link direto para o CSV exportado da Google Drive (Substitui pelo teu link de exportação real)
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1t87M2Y7Z4A_M7Vw3F30bUuV7lC5Z6_L_qUjXf-rSjYg/export?format=csv"
 
-@st.cache_data(ttl=300)  # Faz cache por 5 minutos para ser rápido, depois atualiza
+@st.cache_data(ttl=60)
 def load_data(url):
-    return pd.read_csv(url)
+    # skiprows=12 faz o Python ignorar as primeiras 12 linhas institucionais e ler a tabela real
+    df = pd.read_csv(url, skiprows=12)
+    # Limpar espaços em branco dos nomes das colunas
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
 
 try:
     df = load_data(GOOGLE_SHEET_URL)
-    st.success("✅ Dados carregados com sucesso a partir da Google Drive!")
     
-    # Mapeamento dinâmico de colunas comuns para facilitar a vida ao utilizador
-    colunas_disponiveis = [str(c).strip().lower() for c in df.columns]
+    # Remover linhas totalmente vazias que possam vir no fim do ficheiro
+    df = df.dropna(subset=['Objeto'])
     
-    # Tenta adivinhar a coluna de Estado
-    col_estado = df.columns[0]
-    for c in df.columns:
-        if 'est' in str(c).lower() or 'sit' in str(c).lower() or 'status' in str(c).lower():
-            col_estado = c
-            break
-            
-    # Tenta adivinhar a coluna de Tentativas
-    col_tentativas = df.columns[1] if len(df.columns) > 1 else df.columns[0]
-    for c in df.columns:
-        if 'tent' in str(c).lower() or 'num' in str(c).lower() or 'vez' in str(c).lower():
-            col_tentativas = c
-            break
+    st.success("✅ Dados do Relatório de Expedição carregados com sucesso!")
 
-    # Seletor caso a app falhe a adivinhar
-    st.sidebar.header("⚙️ Configurações de Colunas")
-    col_estado_selecionada = st.sidebar.selectbox("Coluna de Estado/Situação:", df.columns, index=list(df.columns).index(col_estado))
-    col_tentativas_selecionada = st.sidebar.selectbox("Coluna de Tentativas:", df.columns, index=list(df.columns).index(col_tentativas))
-
-    # --- PROCESSAMENTO ---
+    # --- PROCESSAMENTO DOS DADOS REAIS CTT ---
     total_envios = len(df)
     
-    # Tratamento de dados para evitar erros de texto
-    df['estado_clean'] = df[col_estado_selecionada].astype(str).str.strip().str.lower()
+    # Criar uma coluna limpa para analisar o estado (ex: "EMI - Entregue" passa a ser avaliado)
+    df['situacao_clean'] = df['Situação do Objeto'].astype(str).str.upper()
     
-    # Contagens Inteligentes baseadas em termos comuns
-    entregues_df = df[df['estado_clean'].str.contains('entreg|conclu|sucess|ok', na=False)]
-    pendentes_df = df[df['estado_clean'].str.contains('pend|caminh|transit|distrib', na=False)]
-    incidencias_df = df[df['estado_clean'].str.contains('incid|alerta|problem|erro|falh|devolv', na=False)]
+    # Filtros baseados nos códigos reais dos CTT
+    entregues_df = df[df['situacao_clean'].str.contains('ENTREGUE|EMI|ENT', na=False)]
+    pendentes_df = df[df['situacao_clean'].str.contains('TRÂNCO|TRÂNSITO|EMF|DISTRIB', na=False)]
+    incidencias_df = df[df['situacao_clean'].str.contains('INCID|ALERTA|DEV|RETIDO|FALHA', na=False)]
     
     entregues = len(entregues_df)
     pendentes = len(pendentes_df)
-    incidencias = len(incidencias_df)
-    
-    # Garantir que o número de tentativas é tratado como número
-    df[col_tentativas_selecionada] = pd.to_numeric(df[col_tentativas_selecionada], errors='coerce').fillna(1)
-    
-    # Filtrar tentativas dentro dos já entregues
-    entregues_completo_df = df.loc[entregues_df.index]
-    entregues_1a = len(entregues_completo_df[entregues_completo_df[col_tentativas_selecionada] == 1])
-    entregues_2a = len(entregues_completo_df[entregues_completo_df[col_tentativas_selecionada] == 2])
-    outras_tentativas = entregues - (entregues_1a + entregues_2a)
+    incidencias = total_envios - (entregues + pendentes) # O resto assume incidência/outros
 
-    # --- KPIs ---
-    st.subheader("📊 Métricas Principais")
+    # Simulação de tentativas (Como o ficheiro CTT não traz o número, calculamos com base na lógica de eventos)
+    # Se a data do 1º evento for igual à do último, assumimos 1ª tentativa. Se mudar, assumimos 2ª.
+    df['Data 1º Evento'] = df['Data 1º Evento'].astype(str).str.strip()
+    df['Data último evento'] = df['Data último evento'].astype(str).str.strip()
+    
+    entregues_completo_df = df.loc[entregues_df.index].copy()
+    
+    # Extrair apenas a data (sem a hora) para comparar o dia do primeiro e do último evento
+    def calcular_tentativas(row):
+        try:
+            d1 = row['Data 1º Evento'].split()[0]
+            d2 = row['Data último evento'].split()[0]
+            return 1 if d1 == d2 else 2
+        except:
+            return 1
+
+    if not entregues_completo_df.empty:
+        entregues_completo_df['Tentativas_Calculadas'] = entregues_completo_df.apply(calcular_tentativas, axis=1)
+        entregues_1a = len(entregues_completo_df[entregues_completo_df['Tentativas_Calculadas'] == 1])
+        entregues_2a = len(entregues_completo_df[entregues_completo_df['Tentativas_Calculadas'] == 2])
+    else:
+        entregues_1a, entregues_2a = 0, 0
+
+    # --- PAINEL DE METRICAS (KPIs) ---
+    st.subheader("📊 Resumo Operacional")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     
     kpi1.metric(label="📦 Total de Envios", value=f"{total_envios:,}")
     kpi2.metric(label="✅ Entregues", value=f"{entregues:,}", delta=f"{(entregues/max(total_envios,1))*100:.1f}% do total")
-    kpi3.metric(label="⏳ Pendentes / Em Trânsito", value=f"{pendentes:,}", delta=f"{(pendentes/max(total_envios,1))*100:.1f}%", delta_color="inverse")
-    kpi4.metric(label="⚠️ Com Incidência", value=f"{incidencias:,}", delta=f"{(incidencias/max(total_envios,1))*100:.1f}%", delta_color="inverse")
+    kpi3.metric(label="⏳ Em Trânsito / Pendentes", value=f"{pendentes:,}", delta=f"{(pendentes/max(total_envios,1))*100:.1f}%", delta_color="inverse")
+    kpi4.metric(label="⚠️ Incidências / Outros", value=f"{incidencias:,}", delta=f"{(incidencias/max(total_envios,1))*100:.1f}%", delta_color="inverse")
 
     st.markdown("---")
 
@@ -84,26 +80,33 @@ try:
     col_graf1, col_graf2 = st.columns(2)
     
     with col_graf1:
-        st.subheader("🎯 Eficácia à Cabeceira (Tentativas)")
+        st.subheader("🎯 Eficácia de Entrega")
         dados_tentativas = pd.DataFrame({
-            'Tentativa': ['1ª Tentativa', '2ª Tentativa', '3+ Tentativas'],
-            'Quantidade': [entregues_1a, entregues_2a, max(0, outras_tentativas)]
+            'Performance': ['À 1ª Tentativa (Mesmo Dia)', 'À 2ª Tentativa+ (Dias Diferentes)'],
+            'Quantidade': [entregues_1a, entregues_2a]
         })
-        fig_bar = px.bar(dados_tentativas, x='Tentativa', y='Quantidade', text='Quantidade',
-                         color='Tentativa', color_discrete_sequence=['#2ecc71', '#3498db', '#e74c3c'])
+        fig_bar = px.bar(dados_tentativas, x='Performance', y='Quantidade', text='Quantidade',
+                         color='Performance', color_discrete_sequence=['#2ecc71', '#3498db'])
         fig_bar.update_traces(textposition='inside')
         st.plotly_chart(fig_bar, use_container_width=True)
 
     with col_graf2:
-        st.subheader("🔄 Estado Geral da Operação")
-        fig_pie = px.pie(df, names=col_estado_selecionada, color_discrete_sequence=px.colors.qualitative.Safe)
+        st.subheader("🔄 Distribuição por Situação Real")
+        fig_pie = px.pie(df, names='Situação do Objeto', color_discrete_sequence=px.colors.qualitative.Safe)
         st.plotly_chart(fig_pie, use_container_width=True)
 
     # --- TABELA DE DADOS ---
     st.markdown("---")
-    st.subheader("🔍 Base de Dados Completa (Sincronizada)")
-    st.dataframe(df.drop(columns=['estado_clean'], errors='ignore'), use_container_width=True)
+    st.subheader("🔍 Listagem de Objetos Encontrados")
+    
+    # Filtro rápido interativo
+    filtro_sit = st.selectbox("Filtrar listagem por Situação:", ["Todos"] + list(df['Situação do Objeto'].unique()))
+    df_visivel = df if filtro_sit == "Todos" else df[df['Situação do Objeto'] == filtro_sit]
+    
+    # Mostrar colunas úteis organizadas
+    colunas_visiveis = ['Objeto', 'Refª Cliente', 'Situação do Objeto', 'Data 1º Evento', 'Data último evento', 'Nome do Destinatário']
+    st.dataframe(df_visivel[colunas_visiveis], use_container_width=True)
 
 except Exception as e:
-    st.error("A carregar base de dados de demonstração... (Configure o link da sua Drive na barra lateral para ver os seus dados reais)")
-    st.info("Para testar, a app precisa que o ficheiro na sua Google Drive esteja partilhado como 'Qualquer pessoa com o link'.")
+    st.error(f"Erro ao processar a tabela: {e}")
+    st.info("Verifique se o ficheiro na Google Drive mantém a linha 'Cód. Cliente,Cód. Contrato...' na linha 13.")
