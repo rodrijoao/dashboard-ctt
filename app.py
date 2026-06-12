@@ -9,28 +9,23 @@ st.title("📦 Dashboard de Controlo de Envios CTT - B. Braun")
 st.markdown("---")
 
 # ==============================================================================
-# ⚠️ INSTRUÇÃO IMPORTANTE: Substitui o ID abaixo pelo ID da tua Google Drive!
+# 🔗 CONFIGURAÇÃO DIRETA DO LINK DO GOOGLE SHEETS
 # ==============================================================================
-# Como encontrar o ID? Na barra de endereço do teu Google Sheets, é o código longo entre /d/ e /edit
-ID_DA_TUA_DRIVE = "1t87M2Y7Z4A_M7Vw3F30bUuV7lC5Z6_L_qUjXf-rSjYg" 
+# Este link já aponta diretamente para a exportação limpa do teu ficheiro da Drive
+LINK_DIRETO_GOOGLE = "https://docs.google.com/spreadsheets/d/1t87M2Y7Z4A_M7Vw3F30bUuV7lC5Z6_L_qUjXf-rSjYg/export?format=csv"
 
-# Configuração automática da barra lateral para poderes mudar o link se desejares
-st.sidebar.header("⚙️ Configuração da Base de Dados")
-id_input = st.sidebar.text_input("ID do Google Sheets:", value=ID_DA_TUA_DRIVE)
-
-GOOGLE_SHEET_URL = f"https://docs.google.com/spreadsheets/d/{id_input}/export?format=csv"
-
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10) # Atualiza quase em tempo real
 def load_data(url):
     try:
-        # Pula as 12 linhas institucionais para ler os dados reais
+        # Pula as 12 linhas institucionais e lê os dados reais
         df = pd.read_csv(url, skiprows=12)
         df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
+        st.error(f"Erro técnico ao aceder ao Google Sheets: {e}")
         return None
 
-df_raw = load_data(GOOGLE_SHEET_URL)
+df_raw = load_data(LINK_DIRETO_GOOGLE)
 
 if df_raw is not None and 'Objeto' in df_raw.columns:
     # Limpeza de linhas em branco do final do relatório
@@ -39,13 +34,12 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
     # 1. PROCESSAMENTO INTELIGENTE DE ESTADOS (SIGLAS CTT)
     df['Situação_Clean'] = df['Situação do Objeto'].astype(str).str.strip().str.upper()
     
-    # Classificação exata com base no padrão CTT detetado no teu ficheiro
+    # Classificação exata com base no padrão CTT
     entregues_mask = df['Situação_Clean'].str.startswith('EMI') | df['Situação_Clean'].str.contains('ENTREGUE')
     em_transito_mask = df['Situação_Clean'].str.startswith('EMF') | df['Situação_Clean'].str.contains('TRÂN') | df['Situação_Clean'].str.contains('DISTRIB')
     
     df_entregues = df[entregues_mask]
     df_transito = df[em_transito_mask]
-    # O que não está entregue nem em trânsito é considerado Incidência/Retido/Devolvido
     df_incidencias = df[~(entregues_mask | em_transito_mask)]
     
     total_envios = len(df)
@@ -54,7 +48,6 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
     qtd_incidencias = len(df_incidencias)
 
     # 2. CÁLCULO DE TENTATIVAS DE ENTREGA (LÓGICA DE DATAS CTT)
-    # Se a data do primeiro evento é igual à do último, foi entregue à 1ª tentativa
     entregues_1a = 0
     entregues_2a = 0
     
@@ -124,5 +117,5 @@ if df_raw is not None and 'Objeto' in df_raw.columns:
     st.dataframe(df_filtrado[colunas_comerciais], use_container_width=True, hide_index=True)
 
 else:
-    st.error("❌ Não foi possível ler dados válidos do Google Sheets.")
-    st.info("👉 Certifica-te que colaste o ID correto do teu ficheiro na barra lateral e que o partilhaste como 'Qualquer pessoa com o link'.")
+    st.error("❌ Link ou permissões do Google Sheets inválidos.")
+    st.info("Por favor, garanta que no Google Sheets clicou em 'Partilhar' e mudou para 'Qualquer pessoa com o link'.")
