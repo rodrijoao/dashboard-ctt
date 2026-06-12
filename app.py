@@ -12,7 +12,7 @@ st.markdown("---")
 # 🔗 CONFIGURAÇÃO DIRETA DO LINK DO GOOGLE SHEETS
 # ==============================================================================
 # Este link já aponta diretamente para a exportação limpa do teu ficheiro da Drive
-LINK_DIRETO_GOOGLE = https://docs.google.com/spreadsheets/d/1Nd9fxXR4CwlA-t7DJgPYaOfwbKcHekjGwzOxvofwwo0/edit?gid=1823527833#gid=1823527833
+LINK_DIRETO_GOOGLE = https://docs.google.com/spreadsheets/d/e/2PACX-1vR84h1yg_J4CmyKkZ49XCC7rG4NJhSdnLUotwoWKpU4Ebpq2D2QN0ptsxOOUnHy375RykhNP2bD-2DP/pub?output=csv
 
 @st.cache_data(ttl=10) # Atualiza quase em tempo real
 def load_data(url):
